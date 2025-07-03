@@ -1,1 +1,339 @@
-my first game
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cave Explorer 3D Game</title>
+<style>
+  body, html {
+    margin: 0; overflow: hidden; height: 100%; background: black;
+    font-family: Arial, sans-serif;
+    color: white;
+  }
+  #info {
+    position: absolute; top: 10px; left: 10px;
+    z-index: 10; background: rgba(0,0,0,0.5);
+    padding: 10px; border-radius: 5px;
+    max-width: 300px;
+  }
+  #endMessage {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 2rem; color: #0f0; display: none;
+  }
+  canvas {
+    display: block;
+  }
+  #blocker {
+    position: fixed;
+    width: 100%; height: 100%;
+    background-color: rgba(0,0,0,0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 24px;
+    cursor: pointer;
+    z-index: 100;
+  }
+</style>
+</head>
+<body>
+
+<div id="blocker">Click to start</div>
+<div id="info">
+  <div>Use WASD + Mouse to move/look</div>
+  <div>Click to shoot</div>
+  <div>Enemies: Big Spiders (red), Snakes (green), Big Mice (blue)</div>
+  <div>Boss Crocodile appears at the end (yellow)</div>
+</div>
+<div id="endMessage">You defeated the Boss! Game Over. Thanks for playing!</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/controls/PointerLockControls.js"></script>
+
+<script>
+(() => {
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x000000, 10, 50);
+
+  // Camera and Renderer
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  // PointerLockControls for FPS movement
+  const controls = new THREE.PointerLockControls(camera, document.body);
+  const blocker = document.getElementById('blocker');
+  blocker.addEventListener('click', () => {
+    controls.lock();
+  });
+  controls.addEventListener('lock', () => {
+    blocker.style.display = 'none';
+  });
+  controls.addEventListener('unlock', () => {
+    blocker.style.display = 'flex';
+  });
+  scene.add(controls.getObject());
+
+  // Lighting
+  const ambientLight = new THREE.AmbientLight(0x404040, 0.7);
+  scene.add(ambientLight);
+
+  const pointLight = new THREE.PointLight(0xffffff, 1, 100);
+  pointLight.position.set(0, 10, 0);
+  scene.add(pointLight);
+
+  // Floor / Cave ground
+  const floorGeo = new THREE.PlaneGeometry(100, 100, 20, 20);
+  const floorMat = new THREE.MeshStandardMaterial({color: 0x222222, wireframe: false});
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.rotation.x = -Math.PI / 2;
+  scene.add(floor);
+
+  // Cave walls (simple boxes around the floor)
+  const wallMat = new THREE.MeshStandardMaterial({color: 0x111111});
+  const wallThickness = 2;
+  const wallHeight = 10;
+  const walls = [];
+
+  function createWall(x, z, width, depth) {
+    const wallGeo = new THREE.BoxGeometry(width, wallHeight, depth);
+    const wall = new THREE.Mesh(wallGeo, wallMat);
+    wall.position.set(x, wallHeight/2, z);
+    scene.add(wall);
+    walls.push(wall);
+  }
+
+  // Create 4 walls around
+  createWall(0, -50 + wallThickness/2, 100, wallThickness); // back
+  createWall(0, 50 - wallThickness/2, 100, wallThickness);  // front
+  createWall(-50 + wallThickness/2, 0, wallThickness, 100); // left
+  createWall(50 - wallThickness/2, 0, wallThickness, 100);  // right
+
+  // Player variables
+  let moveForward = false;
+  let moveBackward = false;
+  let moveLeft = false;
+  let moveRight = false;
+  const velocity = new THREE.Vector3();
+  const direction = new THREE.Vector3();
+
+  const speed = 5;
+
+  document.addEventListener('keydown', (e) => {
+    switch(e.code) {
+      case 'ArrowUp':
+      case 'KeyW': moveForward = true; break;
+      case 'ArrowLeft':
+      case 'KeyA': moveLeft = true; break;
+      case 'ArrowDown':
+      case 'KeyS': moveBackward = true; break;
+      case 'ArrowRight':
+      case 'KeyD': moveRight = true; break;
+    }
+  });
+
+  document.addEventListener('keyup', (e) => {
+    switch(e.code) {
+      case 'ArrowUp':
+      case 'KeyW': moveForward = false; break;
+      case 'ArrowLeft':
+      case 'KeyA': moveLeft = false; break;
+      case 'ArrowDown':
+      case 'KeyS': moveBackward = false; break;
+      case 'ArrowRight':
+      case 'KeyD': moveRight = false; break;
+    }
+  });
+
+  // Enemies: Big Spider, Snake, Big Mouse
+  // We will create simple shapes to represent them
+  class Enemy {
+    constructor(type, position) {
+      this.type = type;
+      this.health = type === 'boss' ? 20 : 5;
+      this.speed = type === 'boss' ? 1 : 2;
+      this.isAlive = true;
+
+      let geometry, material, color;
+      switch(type) {
+        case 'bigSpider':
+          geometry = new THREE.SphereGeometry(1, 8, 8);
+          color = 0xff0000; // red
+          break;
+        case 'snake':
+          geometry = new THREE.CylinderGeometry(0.5, 0.5, 2, 8);
+          color = 0x00ff00; // green
+          break;
+        case 'bigMouse':
+          geometry = new THREE.BoxGeometry(2,1,1);
+          color = 0x0000ff; // blue
+          break;
+        case 'boss':
+          geometry = new THREE.BoxGeometry(5,3,3);
+          color = 0xffff00; // yellow
+          break;
+      }
+      material = new THREE.MeshStandardMaterial({color});
+      this.mesh = new THREE.Mesh(geometry, material);
+      this.mesh.position.copy(position);
+      scene.add(this.mesh);
+    }
+    update(playerPos, delta) {
+      if(!this.isAlive) return;
+      // Move towards player slowly
+      const dir = new THREE.Vector3();
+      dir.subVectors(playerPos, this.mesh.position).normalize();
+      this.mesh.position.addScaledVector(dir, this.speed * delta);
+
+      // Simple collision to keep inside cave
+      this.mesh.position.clamp(
+        new THREE.Vector3(-48, 0, -48),
+        new THREE.Vector3(48, 10, 48)
+      );
+    }
+    takeDamage(amount) {
+      this.health -= amount;
+      if(this.health <= 0) {
+        this.isAlive = false;
+        scene.remove(this.mesh);
+      }
+    }
+  }
+
+  const enemies = [];
+  // Spawn some enemies randomly in cave except near player start
+  function spawnEnemies() {
+    for(let i=0; i<5; i++) {
+      enemies.push(new Enemy('bigSpider', new THREE.Vector3((Math.random()-0.5)*80, 1, (Math.random()-0.5)*80)));
+      enemies.push(new Enemy('snake', new THREE.Vector3((Math.random()-0.5)*80, 1, (Math.random()-0.5)*80)));
+      enemies.push(new Enemy('bigMouse', new THREE.Vector3((Math.random()-0.5)*80, 0.5, (Math.random()-0.5)*80)));
+    }
+  }
+  spawnEnemies();
+
+  // Boss enemy (hidden initially)
+  let boss = null;
+
+  // Door object (hidden initially)
+  const doorGeo = new THREE.BoxGeometry(3, 6, 0.5);
+  const doorMat = new THREE.MeshStandardMaterial({color: 0x551a8b});
+  const door = new THREE.Mesh(doorGeo, doorMat);
+  door.position.set(0, 3, -48);
+  door.visible = false;
+  scene.add(door);
+
+  // Raycaster for shooting
+  const raycaster = new THREE.Raycaster();
+  const shootRange = 50;
+  const shootDamage = 5;
+
+  window.addEventListener('click', () => {
+    if(!controls.isLocked) return;
+    // Shoot a ray from camera direction
+    raycaster.set(camera.getWorldPosition(new THREE.Vector3()), camera.getWorldDirection(new THREE.Vector3()));
+    const enemyMeshes = enemies.filter(e => e.isAlive).map(e => e.mesh);
+    if(boss && boss.isAlive) enemyMeshes.push(boss.mesh);
+
+    const intersects = raycaster.intersectObjects(enemyMeshes);
+    if(intersects.length > 0) {
+      const hitMesh = intersects[0].object;
+      // Find enemy by mesh
+      let enemy = enemies.find(e => e.mesh === hitMesh);
+      if(!enemy && boss && boss.mesh === hitMesh) enemy = boss;
+      if(enemy) {
+        enemy.takeDamage(shootDamage);
+        // Play some feedback - flash red briefly
+        enemy.mesh.material.color.set(0xffffff);
+        setTimeout(() => {
+          switch(enemy.type) {
+            case 'bigSpider': enemy.mesh.material.color.set(0xff0000); break;
+            case 'snake': enemy.mesh.material.color.set(0x00ff00); break;
+            case 'bigMouse': enemy.mesh.material.color.set(0x0000ff); break;
+            case 'boss': enemy.mesh.material.color.set(0xffff00); break;
+          }
+        }, 100);
+      }
+    }
+  });
+
+  // Game state
+  let bossSpawned = false;
+  let doorUnlocked = false;
+  let gameEnded = false;
+
+  // Animate and game loop
+  let prevTime = performance.now();
+  function animate() {
+    if(gameEnded) return;
+
+    const time = performance.now();
+    const delta = (time - prevTime) / 1000;
+
+    // Movement update
+    velocity.x -= velocity.x * 10.0 * delta;
+    velocity.z -= velocity.z * 10.0 * delta;
+
+    direction.z = Number(moveForward) - Number(moveBackward);
+    direction.x = Number(moveRight) - Number(moveLeft);
+    direction.normalize(); // this ensures consistent movements in all directions
+
+    if (moveForward || moveBackward) velocity.z -= direction.z * speed * delta;
+    if (moveLeft || moveRight) velocity.x -= direction.x * speed * delta;
+
+    controls.moveRight(- velocity.x * delta);
+    controls.moveForward(- velocity.z * delta);
+
+    // Keep player above ground level and inside cave bounds
+    let pos = controls.getObject().position;
+    pos.y = 2;
+    pos.x = THREE.MathUtils.clamp(pos.x, -48, 48);
+    pos.z = THREE.MathUtils.clamp(pos.z, -48, 48);
+
+    // Update enemies
+    enemies.forEach(e => e.update(pos, delta));
+
+    // Check if all normal enemies dead and boss not spawned => spawn boss
+    if(!bossSpawned && enemies.every(e => !e.isAlive)) {
+      boss = new Enemy('boss', new THREE.Vector3(0, 1.5, 40));
+      bossSpawned = true;
+      console.log('Boss Spawned!');
+    }
+
+    // Update boss
+    if(bossSpawned && boss && boss.isAlive) {
+      boss.update(pos, delta);
+    } else if(bossSpawned && boss && !boss.isAlive && !doorUnlocked) {
+      // Unlock door when boss dead
+      door.visible = true;
+      doorUnlocked = true;
+      console.log('Door unlocked!');
+    }
+
+    // Check if player near door to end game
+    if(doorUnlocked && pos.distanceTo(door.position) < 3) {
+      gameEnded = true;
+      document.getElementById('endMessage').style.display = 'block';
+      controls.unlock();
+    }
+
+    renderer.render(scene, camera);
+    prevTime = time;
+    requestAnimationFrame(animate);
+  }
+
+  animate();
+
+  // Handle window resize
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+})();
+</script>
+
+</body>
+</html>
